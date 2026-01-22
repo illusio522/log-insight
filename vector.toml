@@ -1,0 +1,62 @@
+# Vector Configuration for log-insight
+# Docs: https://vector.dev/docs/
+
+[api]
+enabled = true
+address = "0.0.0.0:8686"
+
+# =============================================================================
+# Sources
+# =============================================================================
+
+# Logback remote logging via TCP socket (JSON format)
+[sources.logback]
+type = "socket"
+address = "0.0.0.0:5000"
+mode = "tcp"
+decoding.codec = "json"
+
+# HTTP endpoint for testing (Postman, curl, etc.)
+[sources.http]
+type = "http_server"
+address = "0.0.0.0:8080"
+decoding.codec = "json"
+path = "/logs"
+
+# =============================================================================
+# Transforms
+# =============================================================================
+
+[transforms.enrich_logback]
+type = "remap"
+inputs = ["logback"]
+source = '''
+.source = "logback"
+.processed_at = now()
+'''
+
+[transforms.enrich_http]
+type = "remap"
+inputs = ["http"]
+source = '''
+.source = "http"
+.processed_at = now()
+'''
+
+# =============================================================================
+# Sinks
+# =============================================================================
+
+# Send to Python parser running on host
+[sinks.python_parser]
+type = "http"
+inputs = ["enrich_logback", "enrich_http"]
+uri = "http://host.docker.internal:8000/logs"
+encoding.codec = "json"
+method = "post"
+
+# Console output for debugging
+[sinks.console]
+type = "console"
+inputs = ["enrich_logback", "enrich_http"]
+encoding.codec = "json"

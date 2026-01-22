@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Sample Logback configuration for sending logs to Vector.
+  Place this in src/main/resources/logback-spring.xml of your Spring Boot application.
+
+  Required dependency (build.gradle):
+    implementation 'net.logstash.logback:logstash-logback-encoder:7.4'
+-->
+<configuration>
+    <property name="VECTOR_HOST" value="${VECTOR_HOST:-localhost}"/>
+    <property name="VECTOR_PORT" value="${VECTOR_PORT:-5001}"/>
+
+    <!-- Console appender for local development -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- TCP appender for Vector (JSON format) -->
+    <appender name="VECTOR" class="net.logstash.logback.appender.LogstashTcpSocketAppender">
+        <destination>${VECTOR_HOST}:${VECTOR_PORT}</destination>
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <includeMdcKeyName>traceId</includeMdcKeyName>
+            <includeMdcKeyName>spanId</includeMdcKeyName>
+            <includeMdcKeyName>userId</includeMdcKeyName>
+            <customFields>{"application":"my-app","environment":"${SPRING_PROFILES_ACTIVE:-local}"}</customFields>
+        </encoder>
+        <keepAliveDuration>5 minutes</keepAliveDuration>
+        <reconnectionDelay>1 second</reconnectionDelay>
+    </appender>
+
+    <!-- Async wrapper for better performance -->
+    <appender name="ASYNC_VECTOR" class="ch.qos.logback.classic.AsyncAppender">
+        <appender-ref ref="VECTOR"/>
+        <queueSize>512</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <neverBlock>true</neverBlock>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="ASYNC_VECTOR"/>
+    </root>
+</configuration>
