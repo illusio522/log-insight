@@ -51,52 +51,6 @@
       }
     },
     {
-      "name": "Send INFO Log (Domain2)",
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"@timestamp\": \"2026-01-22T13:46:00.789+09:00\",\n  \"@version\": \"1\",\n  \"message\": \"Created successfully\",\n  \"logger_name\": \"com.example.domain2.Domain2Service\",\n  \"thread_name\": \"http-nio-8080-exec-2\",\n  \"level\": \"INFO\",\n  \"level_value\": 20000,\n  \"application\": \"domain2-service\",\n  \"hostname\": \"server-02\",\n  \"instance\": \"instance2\",\n  \"domain\": \"domain2\",\n  \"api\": \"/api/domain2/create\",\n  \"version\": \"v2\",\n  \"traceId\": \"8c5g0d4e3f6b7c8d\",\n  \"spanId\": \"2b3c4d5e\",\n  \"userId\": \"user-003\"\n}"
-        },
-        "url": {
-          "raw": "http://localhost:8080/logs",
-          "protocol": "http",
-          "host": ["localhost"],
-          "port": "8080",
-          "path": ["logs"]
-        }
-      }
-    },
-    {
-      "name": "Send WARN Log (Domain2)",
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"@timestamp\": \"2026-01-22T13:46:05.321+09:00\",\n  \"@version\": \"1\",\n  \"message\": \"Slow query detected: 2500ms\",\n  \"logger_name\": \"com.example.domain2.Domain2Repository\",\n  \"thread_name\": \"http-nio-8080-exec-4\",\n  \"level\": \"WARN\",\n  \"level_value\": 30000,\n  \"application\": \"domain2-service\",\n  \"hostname\": \"server-02\",\n  \"instance\": \"instance2\",\n  \"domain\": \"domain2\",\n  \"api\": \"/api/domain2/list\",\n  \"version\": \"v1\",\n  \"traceId\": \"9d6h1e5f4g7c8d9e\",\n  \"userId\": \"user-004\"\n}"
-        },
-        "url": {
-          "raw": "http://localhost:8080/logs",
-          "protocol": "http",
-          "host": ["localhost"],
-          "port": "8080",
-          "path": ["logs"]
-        }
-      }
-    },
-    {
       "name": "Vector Health Check",
       "request": {
         "method": "GET",
