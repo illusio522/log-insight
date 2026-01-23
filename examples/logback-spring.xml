@@ -5,6 +5,15 @@
 
   Required dependency (build.gradle):
     implementation 'net.logstash.logback:logstash-logback-encoder:7.4'
+
+  JVM options for instance identification:
+    -Dinstance.name=instance1
+
+  MDC fields (set in Filter/Interceptor):
+    - domain: business domain (domain1, domain2, ...)
+    - api: API endpoint path
+    - version: API version (v1, v2, ...)
+    - traceId, spanId, userId: distributed tracing context
 -->
 <configuration>
     <property name="VECTOR_HOST" value="${VECTOR_HOST:-localhost}"/>
@@ -21,10 +30,19 @@
     <appender name="VECTOR" class="net.logstash.logback.appender.LogstashTcpSocketAppender">
         <destination>${VECTOR_HOST}:${VECTOR_PORT}</destination>
         <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <!-- MDC fields (dynamic, per-request) -->
+            <includeMdcKeyName>domain</includeMdcKeyName>
+            <includeMdcKeyName>api</includeMdcKeyName>
+            <includeMdcKeyName>version</includeMdcKeyName>
             <includeMdcKeyName>traceId</includeMdcKeyName>
             <includeMdcKeyName>spanId</includeMdcKeyName>
             <includeMdcKeyName>userId</includeMdcKeyName>
-            <customFields>{"application":"my-app","environment":"${SPRING_PROFILES_ACTIVE:-local}"}</customFields>
+            <!-- Static fields (per-instance) -->
+            <customFields>{
+              "application": "${spring.application.name:-my-app}",
+              "hostname": "${HOSTNAME:-unknown}",
+              "instance": "${instance.name:-default}"
+            }</customFields>
         </encoder>
         <keepAliveDuration>5 minutes</keepAliveDuration>
         <reconnectionDelay>1 second</reconnectionDelay>

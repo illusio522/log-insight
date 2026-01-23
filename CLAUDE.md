@@ -45,19 +45,43 @@ Logs from Spring Boot applications using `logstash-logback-encoder` have this st
 {
   "@timestamp": "2026-01-22T13:45:30.123+09:00",
   "@version": "1",
-  "message": "User login successful",
-  "logger_name": "com.example.service.UserService",
+  "message": "processed successfully",
+  "logger_name": "com.example.domain.DomainService",
   "thread_name": "http-nio-8080-exec-1",
   "level": "INFO",
   "level_value": 20000,
-  "application": "my-app",
-  "environment": "local",
+  "application": "domain-service",
+  "hostname": "server-01",
+  "instance": "instance1",
+  "domain": "domain",
+  "api": "/api/domain/process",
+  "version": "v1",
   "traceId": "6a3e8b2c1d4f5a6b",
   "spanId": "1a2b3c4d",
   "userId": "user-001",
   "stack_trace": "..."
 }
 ```
+
+**Static fields (per-instance, via JVM options):**
+
+| Field | Description |
+|-------|-------------|
+| `application` | Application name (from `spring.application.name`) |
+| `hostname` | Server hostname |
+| `instance` | WAS instance name (e.g., instance1, instance2) |
+
+**MDC fields (per-request, set in Filter/Interceptor):**
+
+| Field | Description |
+|-------|-------------|
+| `domain` | Business domain (e.g., domain1, domain2) |
+| `api` | API endpoint path |
+| `version` | API version (e.g., v1, v2) |
+| `traceId/spanId` | Distributed tracing context |
+| `userId` | User identifier |
+
+**Other fields:**
 
 | Field | Description |
 |-------|-------------|
@@ -67,5 +91,9 @@ Logs from Spring Boot applications using `logstash-logback-encoder` have this st
 | `logger_name` | Java class name |
 | `thread_name` | Thread that produced the log |
 | `message` | Log message |
-| `traceId/spanId` | MDC context for distributed tracing |
 | `stack_trace` | Exception stack trace (ERROR logs only) |
+
+**JVM options:**
+```bash
+-Dinstance.name=instance1
+```
