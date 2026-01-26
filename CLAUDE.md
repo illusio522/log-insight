@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-log-insight is a Python project (Python 3.11.13). The project is currently in early development.
+log-insight is a Python project (Python 3.11.13) for log collection, error analysis, and visualization.
 
 ## Development Environment
 
@@ -16,8 +16,17 @@ source .venv/bin/activate
 ## Build and Development Commands
 
 ```bash
+# Install dependencies
+pip install -r requirements.txt
+
 # Start Vector pipeline
 docker compose up -d
+
+# Start Python parser service
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+# Start dashboard (in another terminal)
+streamlit run dashboard.py
 
 # View Vector logs
 docker compose logs -f vector
@@ -34,7 +43,11 @@ docker compose down
     - HTTP endpoint on port 8080 (for testing via Postman/curl)
   - Transforms: Enrichment via VRL (Vector Remap Language)
   - Sinks: HTTP sink to Python parser at `localhost:8000/logs`, console output for debugging
-- **Python Parser**: Custom log parser service (to be implemented) receiving logs from Vector
+- **Python Parser** (`app/`): FastAPI service receiving logs from Vector
+  - Error parsing with Drain3 for pattern mining
+  - DuckDB storage for log persistence
+  - REST API for dashboard queries
+- **Dashboard** (`dashboard.py`): Streamlit dashboard for error visualization
 - **Examples**: Sample configurations in `examples/` directory (e.g., `logback-spring.xml`, `postman_collection.json`)
 
 ## Logback JSON Format
