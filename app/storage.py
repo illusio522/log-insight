@@ -46,6 +46,13 @@ class LogStorage:
             CREATE SEQUENCE IF NOT EXISTS logs_id_seq START 1
         """)
 
+        # Indexes for common query patterns
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs (timestamp)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_level ON logs (level)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_application ON logs (application)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_exception_class ON logs (exception_class)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_template_id ON logs (template_id)")
+
     def insert(self, error: ParsedError) -> None:
         """Insert a parsed error into storage."""
         self.conn.execute(
@@ -83,19 +90,56 @@ class LogStorage:
 
     def insert_batch(self, errors: list[ParsedError]) -> None:
         """Insert multiple parsed errors."""
-        for error in errors:
-            self.insert(error)
+        if not errors:
+            return
+        self.conn.executemany(
+            """
+            INSERT INTO logs (
+                id, timestamp, application, hostname, instance, domain, api,
+                trace_id, user_id, level, message, logger_name,
+                exception_class, exception_message, root_cause_class, root_cause_message,
+                template_id, template, stack_trace
+            ) VALUES (
+                nextval('logs_id_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )
+        """,
+            [
+                [
+                    error.timestamp,
+                    error.application,
+                    error.hostname,
+                    error.instance,
+                    error.domain,
+                    error.api,
+                    error.traceId,
+                    error.userId,
+                    error.level,
+                    error.message,
+                    error.logger_name,
+                    error.exception_class,
+                    error.exception_message,
+                    error.root_cause_class,
+                    error.root_cause_message,
+                    error.template_id,
+                    error.template,
+                    error.stack_trace,
+                ]
+                for error in errors
+            ],
+        )
 
     def get_all_logs(self, limit: int = 1000) -> pd.DataFrame:
         """Get all logs as DataFrame."""
+        limit = int(limit)
         return self.conn.execute(
-            f"SELECT * FROM logs ORDER BY timestamp DESC LIMIT {limit}"
+            "SELECT * FROM logs ORDER BY timestamp DESC LIMIT ?", [limit]
         ).fetchdf()
 
     def get_errors(self, limit: int = 1000) -> pd.DataFrame:
         """Get only error logs."""
+        limit = int(limit)
         return self.conn.execute(
-            f"SELECT * FROM logs WHERE level = 'ERROR' ORDER BY timestamp DESC LIMIT {limit}"
+            "SELECT * FROM logs WHERE level = 'ERROR' ORDER BY timestamp DESC LIMIT ?", [limit]
         ).fetchdf()
 
     def get_stats(self) -> LogStats:
@@ -182,8 +226,12 @@ class LogStorage:
             ORDER BY error_count DESC
         """).fetchdf()
 
+    _ALLOWED_INTERVALS = {"second", "minute", "hour", "day", "week", "month", "year"}
+
     def get_errors_by_time(self, interval: str = "hour") -> pd.DataFrame:
         """Get error counts by time interval."""
+        if interval not in self._ALLOWED_INTERVALS:
+            raise ValueError(f"Invalid interval: {interval}. Must be one of {self._ALLOWED_INTERVALS}")
         return self.conn.execute(f"""
             SELECT
                 DATE_TRUNC('{interval}', timestamp) as time_bucket,
@@ -224,11 +272,13 @@ class LogStorage:
             conditions.append("timestamp <= ?")
             params.append(end_time)
 
+        limit = int(limit)
+        params.append(limit)
         query = f"""
             SELECT * FROM logs
             WHERE {' AND '.join(conditions)}
             ORDER BY timestamp DESC
-            LIMIT {limit}
+            LIMIT ?
         """
         return self.conn.execute(query, params).fetchdf()
 

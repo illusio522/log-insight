@@ -1,21 +1,30 @@
+import os
 import re
 from typing import Optional
 from drain3 import TemplateMiner
+from drain3.file_persistence import FilePersistence
 from drain3.template_miner_config import TemplateMinerConfig
 
 from app.models import LogEntry, ParsedError
+
+DRAIN3_STATE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+DRAIN3_STATE_FILE = os.path.join(DRAIN3_STATE_DIR, "drain3_state.bin")
 
 
 class ErrorParser:
     """Parse and analyze Java stack traces using Drain3 for pattern mining."""
 
     def __init__(self):
-        # Configure Drain3
+        # Ensure data directory exists
+        os.makedirs(DRAIN3_STATE_DIR, exist_ok=True)
+
+        # Configure Drain3 with file persistence
         config = TemplateMinerConfig()
         config.drain_sim_th = 0.4  # Similarity threshold
         config.drain_depth = 4
         config.drain_max_children = 100
-        self.miner = TemplateMiner(config=config)
+        persistence = FilePersistence(DRAIN3_STATE_FILE)
+        self.miner = TemplateMiner(persistence_handler=persistence, config=config)
 
         # Regex patterns for Java exceptions
         self.exception_pattern = re.compile(
@@ -53,8 +62,8 @@ class ErrorParser:
         # Template mining for pattern grouping
         text_for_mining = self._get_mining_text(parsed)
         result = self.miner.add_log_message(text_for_mining)
-        parsed.template_id = result.cluster_id
-        parsed.template = result.get_template()
+        parsed.template_id = result["cluster_id"]
+        parsed.template = result["template_mined"]
 
         return parsed
 

@@ -4,3 +4,6 @@
 # Logs
 *.log
 logs/
+
+# Runtime data
+data/
