@@ -1,7 +1,8 @@
 import logging
-from fastapi import FastAPI, HTTPException
+from datetime import datetime
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Union
+from typing import Optional, Union
 
 from app.models import LogEntry, LogStats
 from app.parser import error_parser
@@ -85,19 +86,32 @@ async def get_patterns():
 
 @app.get("/errors")
 async def get_errors(
-    application: str = None,
-    domain: str = None,
-    exception_class: str = None,
+    application: Optional[str] = None,
+    domain: Optional[str] = None,
+    exception_class: Optional[str] = None,
+    start_time: Optional[datetime] = Query(None),
+    end_time: Optional[datetime] = Query(None),
     limit: int = 100,
+    offset: int = 0,
 ):
     """Get error logs with optional filters."""
     df = storage.search_errors(
         application=application,
         domain=domain,
         exception_class=exception_class,
+        start_time=start_time,
+        end_time=end_time,
         limit=limit,
+        offset=offset,
     )
-    return {"errors": df.to_dict("records")}
+    total = storage.count_errors(
+        application=application,
+        domain=domain,
+        exception_class=exception_class,
+        start_time=start_time,
+        end_time=end_time,
+    )
+    return {"errors": df.to_dict("records"), "total": total}
 
 
 @app.get("/errors/by-application")

@@ -51,7 +51,7 @@ source = '''
 [sinks.python_parser]
 type = "http"
 inputs = ["enrich_logback", "enrich_http"]
-uri = "http://host.docker.internal:8000/logs"
+uri = "http://python-parser:8000/logs"
 encoding.codec = "json"
 method = "post"
 

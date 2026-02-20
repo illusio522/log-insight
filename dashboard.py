@@ -1,12 +1,15 @@
+import os
+import time
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import requests
 
 # Configuration
-API_URL = "http://localhost:8000"
+API_URL = os.getenv("API_URL", "http://localhost:8000")
+PAGE_SIZE = 20
 
 st.set_page_config(
     page_title="Log Insight Dashboard",
@@ -17,6 +20,12 @@ st.set_page_config(
 st.title("Log Insight Dashboard")
 
 
+# ---------------------------------------------------------------------------
+# Cached fetch functions
+# ---------------------------------------------------------------------------
+
+
+@st.cache_data(ttl=60)
 def fetch_stats():
     """Fetch statistics from API."""
     try:
@@ -27,17 +36,20 @@ def fetch_stats():
         return None
 
 
-def fetch_errors(limit=100, **filters):
+@st.cache_data(ttl=60)
+def fetch_errors(limit=100, offset=0, **filters):
     """Fetch errors from API."""
     try:
-        params = {"limit": limit, **{k: v for k, v in filters.items() if v}}
+        params = {"limit": limit, "offset": offset, **{k: v for k, v in filters.items() if v}}
         response = requests.get(f"{API_URL}/errors", params=params, timeout=5)
-        return response.json().get("errors", [])
+        data = response.json()
+        return data.get("errors", []), data.get("total", 0)
     except Exception as e:
         st.error(f"Failed to fetch errors: {e}")
-        return []
+        return [], 0
 
 
+@st.cache_data(ttl=60)
 def fetch_patterns():
     """Fetch error patterns from API."""
     try:
@@ -48,6 +60,7 @@ def fetch_patterns():
         return []
 
 
+@st.cache_data(ttl=60)
 def fetch_errors_by_app():
     """Fetch errors grouped by application."""
     try:
@@ -58,6 +71,7 @@ def fetch_errors_by_app():
         return []
 
 
+@st.cache_data(ttl=60)
 def fetch_errors_by_time(interval="hour"):
     """Fetch errors over time."""
     try:
@@ -70,17 +84,43 @@ def fetch_errors_by_time(interval="hour"):
         return []
 
 
+# ---------------------------------------------------------------------------
 # Sidebar filters
+# ---------------------------------------------------------------------------
+
 st.sidebar.header("Filters")
 application_filter = st.sidebar.text_input("Application")
 domain_filter = st.sidebar.text_input("Domain")
 exception_filter = st.sidebar.text_input("Exception Class")
 time_interval = st.sidebar.selectbox("Time Interval", ["hour", "day", "minute"])
 
+st.sidebar.divider()
+st.sidebar.subheader("Date Range")
+today = date.today()
+start_date = st.sidebar.date_input("Start Date", value=today - timedelta(days=7))
+end_date = st.sidebar.date_input("End Date", value=today)
+
+# Convert dates to datetime strings for API
+start_time_str = datetime.combine(start_date, datetime.min.time()).isoformat() if start_date else None
+end_time_str = datetime.combine(end_date, datetime.max.time()).isoformat() if end_date else None
+
+st.sidebar.divider()
+auto_refresh = st.sidebar.toggle("Auto Refresh (60s)", value=False)
+
 if st.sidebar.button("Refresh Data"):
+    st.cache_data.clear()
     st.rerun()
 
+# Auto refresh
+if auto_refresh:
+    time.sleep(60)
+    st.cache_data.clear()
+    st.rerun()
+
+# ---------------------------------------------------------------------------
 # Main content
+# ---------------------------------------------------------------------------
+
 stats = fetch_stats()
 
 if stats:
@@ -185,14 +225,28 @@ if stats:
 
     st.divider()
 
-    # Recent errors table
+    # Recent errors table with pagination
     st.subheader("Recent Errors")
-    errors = fetch_errors(
-        limit=50,
+
+    # Initialize page state
+    if "error_page" not in st.session_state:
+        st.session_state.error_page = 0
+
+    current_page = st.session_state.error_page
+    offset = current_page * PAGE_SIZE
+
+    errors, total_errors = fetch_errors(
+        limit=PAGE_SIZE,
+        offset=offset,
         application=application_filter or None,
         domain=domain_filter or None,
         exception_class=exception_filter or None,
+        start_time=start_time_str,
+        end_time=end_time_str,
     )
+
+    total_pages = max(1, (total_errors + PAGE_SIZE - 1) // PAGE_SIZE)
+
     if errors:
         df = pd.DataFrame(errors)
         display_cols = [
@@ -229,6 +283,22 @@ if stats:
                     if error.get("stack_trace"):
                         st.text(f"Error {i + 1}: {error.get('root_cause_class', 'Unknown')}")
                         st.code(error["stack_trace"], language="java")
+
+        # Pagination controls
+        pcol1, pcol2, pcol3 = st.columns([1, 2, 1])
+        with pcol1:
+            if st.button("Previous", disabled=(current_page == 0)):
+                st.session_state.error_page = current_page - 1
+                st.rerun()
+        with pcol2:
+            st.markdown(
+                f"<div style='text-align:center'>Page {current_page + 1} / {total_pages} ({total_errors} errors)</div>",
+                unsafe_allow_html=True,
+            )
+        with pcol3:
+            if st.button("Next", disabled=(current_page >= total_pages - 1)):
+                st.session_state.error_page = current_page + 1
+                st.rerun()
     else:
         st.info("No errors found matching filters")
 

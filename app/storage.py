@@ -251,6 +251,7 @@ class LogStorage:
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
         limit: int = 100,
+        offset: int = 0,
     ) -> pd.DataFrame:
         """Search errors with filters."""
         conditions = ["level = 'ERROR'"]
@@ -273,14 +274,46 @@ class LogStorage:
             params.append(end_time)
 
         limit = int(limit)
-        params.append(limit)
+        offset = int(offset)
+        params.extend([limit, offset])
         query = f"""
             SELECT * FROM logs
             WHERE {' AND '.join(conditions)}
             ORDER BY timestamp DESC
-            LIMIT ?
+            LIMIT ? OFFSET ?
         """
         return self.conn.execute(query, params).fetchdf()
+
+    def count_errors(
+        self,
+        application: Optional[str] = None,
+        domain: Optional[str] = None,
+        exception_class: Optional[str] = None,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+    ) -> int:
+        """Count errors matching filters."""
+        conditions = ["level = 'ERROR'"]
+        params = []
+
+        if application:
+            conditions.append("application = ?")
+            params.append(application)
+        if domain:
+            conditions.append("domain = ?")
+            params.append(domain)
+        if exception_class:
+            conditions.append("(exception_class LIKE ? OR root_cause_class LIKE ?)")
+            params.extend([f"%{exception_class}%", f"%{exception_class}%"])
+        if start_time:
+            conditions.append("timestamp >= ?")
+            params.append(start_time)
+        if end_time:
+            conditions.append("timestamp <= ?")
+            params.append(end_time)
+
+        query = f"SELECT COUNT(*) FROM logs WHERE {' AND '.join(conditions)}"
+        return self.conn.execute(query, params).fetchone()[0]
 
     def clear(self):
         """Clear all logs."""
