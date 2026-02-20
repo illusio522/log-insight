@@ -208,7 +208,7 @@ class LogStorage:
                 MIN(timestamp) as first_seen
             FROM logs
             WHERE level = 'ERROR'
-            GROUP BY template_id, template, exception_class
+            GROUP BY template_id, template, COALESCE(root_cause_class, exception_class)
             ORDER BY count DESC
         """).fetchdf()
 
@@ -318,7 +318,8 @@ class LogStorage:
     def clear(self):
         """Clear all logs."""
         self.conn.execute("DELETE FROM logs")
-        self.conn.execute("ALTER SEQUENCE logs_id_seq RESTART WITH 1")
+        self.conn.execute("DROP SEQUENCE IF EXISTS logs_id_seq")
+        self.conn.execute("CREATE SEQUENCE logs_id_seq START 1")
 
 
 # Global storage instance
