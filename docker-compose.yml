@@ -1,4 +1,20 @@
 services:
+  python-parser:
+    build: .
+    container_name: log-insight-parser
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   vector:
     image: timberio/vector:0.34.1-alpine
     container_name: log-insight-vector
@@ -13,6 +29,9 @@ services:
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      python-parser:
+        condition: service_healthy
 
 volumes:
   vector-data:
