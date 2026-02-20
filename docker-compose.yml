@@ -9,6 +9,10 @@ services:
       - "8080:8080"  # HTTP endpoint for testing
     volumes:
       - ./vector.toml:/etc/vector/vector.toml:ro
+      - vector-data:/var/lib/vector
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+volumes:
+  vector-data:
