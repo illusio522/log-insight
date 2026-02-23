@@ -1,6 +1,10 @@
 # Environments
 .venv
 
+# Python
+__pycache__/
+*.pyc
+
 # Logs
 *.log
 logs/
