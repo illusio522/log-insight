@@ -89,25 +89,32 @@ async def get_errors(
     application: Optional[str] = None,
     domain: Optional[str] = None,
     exception_class: Optional[str] = None,
+    api: Optional[str] = None,
     start_time: Optional[datetime] = Query(None),
     end_time: Optional[datetime] = Query(None),
     limit: int = 100,
     offset: int = 0,
+    sort_by: str = "timestamp",
+    sort_order: str = "desc",
 ):
     """Get error logs with optional filters."""
     df = storage.search_errors(
         application=application,
         domain=domain,
         exception_class=exception_class,
+        api=api,
         start_time=start_time,
         end_time=end_time,
         limit=limit,
         offset=offset,
+        sort_by=sort_by,
+        sort_order=sort_order,
     )
     total = storage.count_errors(
         application=application,
         domain=domain,
         exception_class=exception_class,
+        api=api,
         start_time=start_time,
         end_time=end_time,
     )

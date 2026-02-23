@@ -243,15 +243,21 @@ class LogStorage:
             ORDER BY time_bucket
         """).fetchdf()
 
+    _ALLOWED_SORT_COLUMNS = {"timestamp", "application", "exception_class", "level"}
+    _ALLOWED_SORT_ORDERS = {"asc", "desc"}
+
     def search_errors(
         self,
         application: Optional[str] = None,
         domain: Optional[str] = None,
         exception_class: Optional[str] = None,
+        api: Optional[str] = None,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
         limit: int = 100,
         offset: int = 0,
+        sort_by: str = "timestamp",
+        sort_order: str = "desc",
     ) -> pd.DataFrame:
         """Search errors with filters."""
         conditions = ["level = 'ERROR'"]
@@ -263,6 +269,9 @@ class LogStorage:
         if domain:
             conditions.append("domain = ?")
             params.append(domain)
+        if api:
+            conditions.append("api LIKE ?")
+            params.append(api.replace("*", "%"))
         if exception_class:
             conditions.append("(exception_class LIKE ? OR root_cause_class LIKE ?)")
             params.extend([f"%{exception_class}%", f"%{exception_class}%"])
@@ -273,13 +282,18 @@ class LogStorage:
             conditions.append("timestamp <= ?")
             params.append(end_time)
 
+        if sort_by not in self._ALLOWED_SORT_COLUMNS:
+            sort_by = "timestamp"
+        if sort_order.lower() not in self._ALLOWED_SORT_ORDERS:
+            sort_order = "desc"
+
         limit = int(limit)
         offset = int(offset)
         params.extend([limit, offset])
         query = f"""
             SELECT * FROM logs
             WHERE {' AND '.join(conditions)}
-            ORDER BY timestamp DESC
+            ORDER BY {sort_by} {sort_order.upper()}
             LIMIT ? OFFSET ?
         """
         return self.conn.execute(query, params).fetchdf()
@@ -289,6 +303,7 @@ class LogStorage:
         application: Optional[str] = None,
         domain: Optional[str] = None,
         exception_class: Optional[str] = None,
+        api: Optional[str] = None,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
     ) -> int:
@@ -302,6 +317,9 @@ class LogStorage:
         if domain:
             conditions.append("domain = ?")
             params.append(domain)
+        if api:
+            conditions.append("api LIKE ?")
+            params.append(api.replace("*", "%"))
         if exception_class:
             conditions.append("(exception_class LIKE ? OR root_cause_class LIKE ?)")
             params.extend([f"%{exception_class}%", f"%{exception_class}%"])
