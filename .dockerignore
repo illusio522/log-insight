@@ -6,8 +6,13 @@ data/
 .git/
 .claude/
 *.md
+*.db
+*.duckdb
+.DS_Store
+.env
 dashboard.py
 examples/
+scripts/
 vector.toml
 docker-compose.yml
 Dockerfile

@@ -1,9 +1,14 @@
 # Environments
 .venv
+.env
 
 # Python
 __pycache__/
 *.pyc
+
+# Database
+*.db
+*.duckdb
 
 # Logs
 *.log
@@ -11,3 +16,6 @@ logs/
 
 # Runtime data
 data/
+
+# macOS
+.DS_Store
