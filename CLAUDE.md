@@ -19,19 +19,23 @@ source .venv/bin/activate
 # Install dependencies
 pip install -r requirements.txt
 
-# Start Vector pipeline
+# Start full stack via Docker (Vector + Python parser)
 docker compose up -d
 
-# Start Python parser service
+# Or start services individually (local development)
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 # Start dashboard (in another terminal)
-streamlit run dashboard.py
+streamlit run dashboard.py --server.headless true
+
+# Generate test logs (sends to parser directly or via Vector)
+python scripts/generate_logs.py --count 200 --endpoint http://localhost:8000
+python scripts/generate_logs.py --count 500 --endpoint http://localhost:8000 --days-ago 7
 
 # View Vector logs
 docker compose logs -f vector
 
-# Stop Vector
+# Stop all services
 docker compose down
 ```
 
@@ -42,12 +46,21 @@ docker compose down
     - Logback TCP socket on port 5001 (for remote logging from application servers)
     - HTTP endpoint on port 8080 (for testing via Postman/curl)
   - Transforms: Enrichment via VRL (Vector Remap Language)
-  - Sinks: HTTP sink to Python parser at `localhost:8000/logs`, console output for debugging
-- **Python Parser** (`app/`): FastAPI service receiving logs from Vector
-  - Error parsing with Drain3 for pattern mining
-  - DuckDB storage for log persistence
-  - REST API for dashboard queries
+  - Sinks: HTTP sink to Python parser (`python-parser:8000/logs`), console output for debugging
+  - Batching: 50 events or 5 seconds, disk buffer (256MB), retry with fibonacci backoff
+- **Python Parser** (`app/`): FastAPI service receiving logs from Vector (containerized via Dockerfile)
+  - Error parsing with Drain3 for pattern mining (state persisted to `data/drain3_state.bin`)
+  - DuckDB storage for log persistence (indexed on timestamp, level, application, exception_class, template_id)
+  - REST API for dashboard queries (pagination, sorting, wildcard filtering)
 - **Dashboard** (`dashboard.py`): Streamlit dashboard for error visualization
+  - Date range filter, pagination, server-side sorting
+  - API path wildcard filter (`*` support)
+  - Row selection for stack trace viewing
+  - Auto-refresh option, cached API calls (60s TTL)
+  - Configurable API URL via `API_URL` environment variable
+- **Log Generator** (`scripts/generate_logs.py`): Test log generation script
+  - Supports `--count`, `--endpoint`, `--days-ago` options
+  - Generates realistic Logback JSON with diverse exceptions and stack traces
 - **Examples**: Sample configurations in `examples/` directory (e.g., `logback-spring.xml`, `postman_collection.json`)
 
 ## Logback JSON Format

@@ -153,6 +153,37 @@
           }
         },
         {
+          "name": "Get Errors with Pagination",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "http://localhost:8000/errors?limit=20&offset=0&sort_by=timestamp&sort_order=desc",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8000",
+              "path": ["errors"],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                },
+                {
+                  "key": "sort_by",
+                  "value": "timestamp"
+                },
+                {
+                  "key": "sort_order",
+                  "value": "desc"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "Get Errors by Application",
           "request": {
             "method": "GET",
@@ -195,6 +226,103 @@
           }
         },
         {
+          "name": "Get Errors by API Path (Wildcard)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "http://localhost:8000/errors?api=*/domain1/*",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8000",
+              "path": ["errors"],
+              "query": [
+                {
+                  "key": "api",
+                  "value": "*/domain1/*"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Errors by Date Range",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "http://localhost:8000/errors?start_time=2026-01-01T00:00:00&end_time=2026-01-31T23:59:59&limit=50",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8000",
+              "path": ["errors"],
+              "query": [
+                {
+                  "key": "start_time",
+                  "value": "2026-01-01T00:00:00"
+                },
+                {
+                  "key": "end_time",
+                  "value": "2026-01-31T23:59:59"
+                },
+                {
+                  "key": "limit",
+                  "value": "50"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Errors (Full Filter)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "http://localhost:8000/errors?application=domain1-service&domain=domain1&api=*/process&start_time=2026-01-01T00:00:00&end_time=2026-12-31T23:59:59&sort_by=timestamp&sort_order=desc&limit=20&offset=0",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8000",
+              "path": ["errors"],
+              "query": [
+                {
+                  "key": "application",
+                  "value": "domain1-service"
+                },
+                {
+                  "key": "domain",
+                  "value": "domain1"
+                },
+                {
+                  "key": "api",
+                  "value": "*/process"
+                },
+                {
+                  "key": "start_time",
+                  "value": "2026-01-01T00:00:00"
+                },
+                {
+                  "key": "end_time",
+                  "value": "2026-12-31T23:59:59"
+                },
+                {
+                  "key": "sort_by",
+                  "value": "timestamp"
+                },
+                {
+                  "key": "sort_order",
+                  "value": "desc"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "Errors by Application Summary",
           "request": {
             "method": "GET",
@@ -221,6 +349,25 @@
                 {
                   "key": "interval",
                   "value": "hour"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Errors by Time (Daily)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "http://localhost:8000/errors/by-time?interval=day",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8000",
+              "path": ["errors", "by-time"],
+              "query": [
+                {
+                  "key": "interval",
+                  "value": "day"
                 }
               ]
             }
