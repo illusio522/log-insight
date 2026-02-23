@@ -295,6 +295,12 @@ def main() -> None:
         default="http://localhost:8080",
         help="Vector HTTP endpoint (default: http://localhost:8080)",
     )
+    parser.add_argument(
+        "--days-ago",
+        type=int,
+        default=0,
+        help="Generate logs spread over N days ago until now (default: 0, last hour only)",
+    )
     args = parser.parse_args()
 
     url = f"{args.endpoint.rstrip('/')}/logs"
@@ -303,12 +309,13 @@ def main() -> None:
     failed = 0
 
     now = datetime.now(KST)
+    spread_seconds = max(args.days_ago * 86400, 3600)
 
-    print(f"Sending {total} logs to {url}")
+    print(f"Sending {total} logs to {url} (spread over {args.days_ago} days)" if args.days_ago else f"Sending {total} logs to {url}")
 
     for i in range(total):
-        # Spread logs over the last hour
-        offset = timedelta(seconds=random.uniform(0, 3600))
+        # Spread logs over the configured time range
+        offset = timedelta(seconds=random.uniform(0, spread_seconds))
         log = generate_log(now - offset)
 
         try:

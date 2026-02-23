@@ -91,14 +91,20 @@ def fetch_errors_by_time(interval="hour"):
 st.sidebar.header("Filters")
 application_filter = st.sidebar.text_input("Application")
 domain_filter = st.sidebar.text_input("Domain")
+api_filter = st.sidebar.text_input("API Path", placeholder="*/domain1/*")
 exception_filter = st.sidebar.text_input("Exception Class")
 time_interval = st.sidebar.selectbox("Time Interval", ["hour", "day", "minute"])
+
+st.sidebar.divider()
+st.sidebar.subheader("Sort")
+sort_by = st.sidebar.selectbox("Sort By", ["timestamp", "application", "exception_class"])
+sort_order = st.sidebar.selectbox("Order", ["desc", "asc"], format_func=lambda x: "Newest First" if x == "desc" else "Oldest First")
 
 st.sidebar.divider()
 st.sidebar.subheader("Date Range")
 today = date.today()
 start_date = st.sidebar.date_input("Start Date", value=today - timedelta(days=7))
-end_date = st.sidebar.date_input("End Date", value=today)
+end_date = st.sidebar.date_input("End Date", value=today + timedelta(days=1))
 
 # Convert dates to datetime strings for API
 start_time_str = datetime.combine(start_date, datetime.min.time()).isoformat() if start_date else None
@@ -225,82 +231,97 @@ if stats:
 
     st.divider()
 
-    # Recent errors table with pagination
+    # Recent errors table with pagination (fragment to avoid scroll-to-top)
     st.subheader("Recent Errors")
 
-    # Initialize page state
-    if "error_page" not in st.session_state:
-        st.session_state.error_page = 0
+    @st.fragment
+    def error_table_fragment():
+        # Initialize page state
+        if "error_page" not in st.session_state:
+            st.session_state.error_page = 0
 
-    current_page = st.session_state.error_page
-    offset = current_page * PAGE_SIZE
+        current_page = st.session_state.error_page
+        frag_offset = current_page * PAGE_SIZE
 
-    errors, total_errors = fetch_errors(
-        limit=PAGE_SIZE,
-        offset=offset,
-        application=application_filter or None,
-        domain=domain_filter or None,
-        exception_class=exception_filter or None,
-        start_time=start_time_str,
-        end_time=end_time_str,
-    )
+        errors, total_errors = fetch_errors(
+            limit=PAGE_SIZE,
+            offset=frag_offset,
+            application=application_filter or None,
+            domain=domain_filter or None,
+            exception_class=exception_filter or None,
+            api=api_filter or None,
+            start_time=start_time_str,
+            end_time=end_time_str,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
 
-    total_pages = max(1, (total_errors + PAGE_SIZE - 1) // PAGE_SIZE)
+        total_pages = max(1, (total_errors + PAGE_SIZE - 1) // PAGE_SIZE)
 
-    if errors:
-        df = pd.DataFrame(errors)
-        display_cols = [
-            "timestamp",
-            "application",
-            "domain",
-            "root_cause_class",
-            "exception_message",
-            "api",
-            "user_id",
-        ]
-        available_cols = [c for c in display_cols if c in df.columns]
-        if available_cols:
-            st.dataframe(
-                df[available_cols],
-                column_config={
-                    "timestamp": st.column_config.DatetimeColumn("Time"),
-                    "application": st.column_config.TextColumn("Application"),
-                    "domain": st.column_config.TextColumn("Domain"),
-                    "root_cause_class": st.column_config.TextColumn("Exception"),
-                    "exception_message": st.column_config.TextColumn(
-                        "Message", width="large"
-                    ),
-                    "api": st.column_config.TextColumn("API"),
-                    "user_id": st.column_config.TextColumn("User"),
-                },
-                use_container_width=True,
-                hide_index=True,
-            )
+        if errors:
+            df = pd.DataFrame(errors)
+            display_cols = [
+                "timestamp",
+                "application",
+                "domain",
+                "root_cause_class",
+                "exception_message",
+                "api",
+                "user_id",
+            ]
+            available_cols = [c for c in display_cols if c in df.columns]
+            if available_cols:
+                selection = st.dataframe(
+                    df[available_cols],
+                    column_config={
+                        "timestamp": st.column_config.DatetimeColumn("Time"),
+                        "application": st.column_config.TextColumn("Application"),
+                        "domain": st.column_config.TextColumn("Domain"),
+                        "root_cause_class": st.column_config.TextColumn("Exception"),
+                        "exception_message": st.column_config.TextColumn(
+                            "Message", width="large"
+                        ),
+                        "api": st.column_config.TextColumn("API"),
+                        "user_id": st.column_config.TextColumn("User"),
+                    },
+                    use_container_width=True,
+                    hide_index=True,
+                    selection_mode="single-row",
+                    on_select="rerun",
+                )
 
-            # Expandable details
-            with st.expander("View Stack Traces"):
-                for i, error in enumerate(errors[:10]):
+                # Show stack trace for selected row
+                selected_rows = selection.selection.rows
+                if selected_rows:
+                    idx = selected_rows[0]
+                    error = errors[idx]
                     if error.get("stack_trace"):
-                        st.text(f"Error {i + 1}: {error.get('root_cause_class', 'Unknown')}")
+                        st.subheader(f"Stack Trace - {error.get('root_cause_class', 'Unknown')}")
                         st.code(error["stack_trace"], language="java")
+                    else:
+                        st.info("This log entry has no stack trace.")
+                else:
+                    st.caption("Select a row to view its stack trace.")
 
-        # Pagination controls
-        pcol1, pcol2, pcol3 = st.columns([1, 2, 1])
-        with pcol1:
-            if st.button("Previous", disabled=(current_page == 0)):
-                st.session_state.error_page = current_page - 1
-                st.rerun()
-        with pcol2:
-            st.markdown(
-                f"<div style='text-align:center'>Page {current_page + 1} / {total_pages} ({total_errors} errors)</div>",
-                unsafe_allow_html=True,
-            )
-        with pcol3:
-            if st.button("Next", disabled=(current_page >= total_pages - 1)):
-                st.session_state.error_page = current_page + 1
-                st.rerun()
-    else:
-        st.info("No errors found matching filters")
+            # Pagination controls
+            pcol1, pcol2, pcol3 = st.columns([1, 2, 1])
+            with pcol1:
+                if st.button("Previous", disabled=(current_page == 0)):
+                    st.session_state.error_page = current_page - 1
+                    st.rerun(scope="fragment")
+            with pcol2:
+                st.markdown(
+                    f"<div style='text-align:center'>Page {current_page + 1} / {total_pages} ({total_errors} errors)</div>",
+                    unsafe_allow_html=True,
+                )
+            with pcol3:
+                if st.button("Next", disabled=(current_page >= total_pages - 1)):
+                    st.session_state.error_page = current_page + 1
+                    st.rerun(scope="fragment")
+        else:
+            st.info("No errors found matching filters")
+
+    error_table_fragment()
 
 else:
     st.warning("Could not connect to the parser service. Make sure it's running on port 8000.")
