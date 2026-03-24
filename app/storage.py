@@ -246,7 +246,7 @@ class LogStorage:
     _ALLOWED_SORT_COLUMNS = {"timestamp", "application", "exception_class", "level"}
     _ALLOWED_SORT_ORDERS = {"asc", "desc"}
 
-    def search_errors(
+    def _build_error_filter(
         self,
         application: Optional[str] = None,
         domain: Optional[str] = None,
@@ -254,12 +254,8 @@ class LogStorage:
         api: Optional[str] = None,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
-        limit: int = 100,
-        offset: int = 0,
-        sort_by: str = "timestamp",
-        sort_order: str = "desc",
-    ) -> pd.DataFrame:
-        """Search errors with filters."""
+    ) -> tuple[list[str], list]:
+        """Build WHERE conditions and params for error queries."""
         conditions = ["level = 'ERROR'"]
         params = []
 
@@ -281,6 +277,27 @@ class LogStorage:
         if end_time:
             conditions.append("timestamp <= ?")
             params.append(end_time)
+
+        return conditions, params
+
+    def search_errors(
+        self,
+        application: Optional[str] = None,
+        domain: Optional[str] = None,
+        exception_class: Optional[str] = None,
+        api: Optional[str] = None,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        limit: int = 100,
+        offset: int = 0,
+        sort_by: str = "timestamp",
+        sort_order: str = "desc",
+    ) -> pd.DataFrame:
+        """Search errors with filters."""
+        conditions, params = self._build_error_filter(
+            application=application, domain=domain, exception_class=exception_class,
+            api=api, start_time=start_time, end_time=end_time,
+        )
 
         if sort_by not in self._ALLOWED_SORT_COLUMNS:
             sort_by = "timestamp"
@@ -308,27 +325,10 @@ class LogStorage:
         end_time: Optional[datetime] = None,
     ) -> int:
         """Count errors matching filters."""
-        conditions = ["level = 'ERROR'"]
-        params = []
-
-        if application:
-            conditions.append("application = ?")
-            params.append(application)
-        if domain:
-            conditions.append("domain = ?")
-            params.append(domain)
-        if api:
-            conditions.append("api LIKE ?")
-            params.append(api.replace("*", "%"))
-        if exception_class:
-            conditions.append("(exception_class LIKE ? OR root_cause_class LIKE ?)")
-            params.extend([f"%{exception_class}%", f"%{exception_class}%"])
-        if start_time:
-            conditions.append("timestamp >= ?")
-            params.append(start_time)
-        if end_time:
-            conditions.append("timestamp <= ?")
-            params.append(end_time)
+        conditions, params = self._build_error_filter(
+            application=application, domain=domain, exception_class=exception_class,
+            api=api, start_time=start_time, end_time=end_time,
+        )
 
         query = f"SELECT COUNT(*) FROM logs WHERE {' AND '.join(conditions)}"
         return self.conn.execute(query, params).fetchone()[0]
