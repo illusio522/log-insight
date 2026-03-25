@@ -2,6 +2,7 @@ import logging
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+import os
 from typing import Optional, Union
 
 from app.models import LogEntry, LogStats
@@ -19,10 +20,10 @@ app = FastAPI(
 )
 
 # CORS for dashboard
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:8501").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )

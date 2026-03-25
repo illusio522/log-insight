@@ -1,5 +1,4 @@
 import os
-import time
 
 import streamlit as st
 import pandas as pd
@@ -117,12 +116,6 @@ if st.sidebar.button("Refresh Data"):
     st.cache_data.clear()
     st.rerun()
 
-# Auto refresh
-if auto_refresh:
-    time.sleep(60)
-    st.cache_data.clear()
-    st.rerun()
-
 # ---------------------------------------------------------------------------
 # Main content
 # ---------------------------------------------------------------------------
@@ -234,7 +227,7 @@ if stats:
     # Recent errors table with pagination (fragment to avoid scroll-to-top)
     st.subheader("Recent Errors")
 
-    @st.fragment
+    @st.fragment(run_every=60 if auto_refresh else None)
     def error_table_fragment():
         # Initialize page state
         if "error_page" not in st.session_state:
