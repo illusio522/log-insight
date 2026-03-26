@@ -3,7 +3,7 @@ services:
     build: .
     container_name: log-insight-parser
     ports:
-      - "8000:8000"
+      - "8002:8000"
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data
@@ -27,8 +27,21 @@ services:
       - ./vector.toml:/etc/vector/vector.toml:ro
       - vector-data:/var/lib/vector
     restart: unless-stopped
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    depends_on:
+      python-parser:
+        condition: service_healthy
+
+  dashboard:
+    build: .
+    container_name: log-insight-dashboard
+    ports:
+      - "8501:8501"
+    environment:
+      - API_URL=http://python-parser:8000
+    command: ["streamlit", "run", "dashboard.py", "--server.port", "8501", "--server.headless", "true"]
+    volumes:
+      - ./dashboard.py:/app/dashboard.py:ro
+    restart: unless-stopped
     depends_on:
       python-parser:
         condition: service_healthy

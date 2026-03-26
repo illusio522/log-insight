@@ -10,7 +10,6 @@ data/
 *.duckdb
 .DS_Store
 .env
-dashboard.py
 examples/
 scripts/
 vector.toml
