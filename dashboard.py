@@ -257,6 +257,7 @@ if stats:
                 "timestamp",
                 "application",
                 "domain",
+                "language",
                 "root_cause_class",
                 "exception_message",
                 "api",
@@ -270,6 +271,7 @@ if stats:
                         "timestamp": st.column_config.DatetimeColumn("Time"),
                         "application": st.column_config.TextColumn("Application"),
                         "domain": st.column_config.TextColumn("Domain"),
+                        "language": st.column_config.TextColumn("Language"),
                         "root_cause_class": st.column_config.TextColumn("Exception"),
                         "exception_message": st.column_config.TextColumn(
                             "Message", width="large"

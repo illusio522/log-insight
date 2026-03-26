@@ -65,6 +65,7 @@ class LogStorage:
                     root_cause_message TEXT,
                     template_id INTEGER,
                     template TEXT,
+                    language VARCHAR DEFAULT 'unknown',
                     stack_trace TEXT,
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 )
@@ -75,6 +76,10 @@ class LogStorage:
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_application ON logs (application)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_exception_class ON logs (exception_class)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_template_id ON logs (template_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_language ON logs (language)")
+            # Composite indexes for common dashboard queries
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_level_timestamp ON logs (level, timestamp DESC)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_level_application ON logs (level, application)")
 
     # ------------------------------------------------------------------
     # Background writer
@@ -112,10 +117,10 @@ class LogStorage:
                         timestamp, application, hostname, instance, domain, api,
                         trace_id, user_id, level, message, logger_name,
                         exception_class, exception_message, root_cause_class,
-                        root_cause_message, template_id, template, stack_trace
+                        root_cause_message, template_id, template, language, stack_trace
                     ) VALUES (
                         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-                        $12, $13, $14, $15, $16, $17, $18
+                        $12, $13, $14, $15, $16, $17, $18, $19
                     )""",
                     [self._error_to_tuple(e) for e in batch],
                 )
@@ -141,7 +146,7 @@ class LogStorage:
             error.userId, error.level, error.message, error.logger_name,
             error.exception_class, error.exception_message,
             error.root_cause_class, error.root_cause_message,
-            error.template_id, error.template, error.stack_trace,
+            error.template_id, error.template, error.language, error.stack_trace,
         )
 
     # ------------------------------------------------------------------

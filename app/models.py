@@ -67,6 +67,9 @@ class ParsedError(BaseModel):
     template_id: int = 0
     template: str = ""
 
+    # Language detection
+    language: str = "unknown"
+
     # Full stack trace
     stack_trace: Optional[str] = None
 

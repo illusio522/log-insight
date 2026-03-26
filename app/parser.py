@@ -12,7 +12,7 @@ DRAIN3_STATE_FILE = os.path.join(DRAIN3_STATE_DIR, "drain3_state.bin")
 
 
 class ErrorParser:
-    """Parse and analyze Java stack traces using Drain3 for pattern mining."""
+    """Parse and analyze stack traces using Drain3 for pattern mining."""
 
     def __init__(self):
         # Ensure data directory exists
@@ -27,13 +27,22 @@ class ErrorParser:
         self.miner = TemplateMiner(persistence_handler=persistence, config=config)
 
         # Regex patterns for Java exceptions
-        self.exception_pattern = re.compile(
+        self.java_exception_pattern = re.compile(
             r"^([\w.$]+(?:Exception|Error|Throwable)):\s*(.*)$", re.MULTILINE
         )
-        self.caused_by_pattern = re.compile(
+        self.java_caused_by_pattern = re.compile(
             r"Caused by:\s*([\w.$]+(?:Exception|Error|Throwable)):\s*(.*?)(?:\n|\r|$)"
         )
-        self.at_pattern = re.compile(r"^\s+at\s+([\w.$]+)\(([\w.$]+):(\d+)\)", re.MULTILINE)
+        self.java_at_pattern = re.compile(r"^\s+at\s+([\w.$]+)\(([\w.$]+):(\d+)\)", re.MULTILINE)
+
+        # Regex patterns for Python tracebacks
+        self.python_traceback_marker = re.compile(r"^Traceback \(most recent call last\):", re.MULTILINE)
+        self.python_exception_pattern = re.compile(
+            r"^(\w+(?:Error|Exception|Warning|Exit|Interrupt|Failure))\s*(?::\s*(.*))?$", re.MULTILINE
+        )
+        self.python_file_pattern = re.compile(
+            r'^\s+File "(.+?)", line (\d+), in (.+)$', re.MULTILINE
+        )
 
     def parse(self, log: LogEntry) -> ParsedError:
         """Parse a log entry and extract error information."""
@@ -54,7 +63,12 @@ class ErrorParser:
 
         # Parse stack trace if present
         if log.stack_trace:
-            self._parse_stack_trace(log.stack_trace, parsed)
+            if self.python_traceback_marker.search(log.stack_trace):
+                self._parse_python_traceback(log.stack_trace, parsed)
+                parsed.language = "python"
+            else:
+                self._parse_java_stack_trace(log.stack_trace, parsed)
+                parsed.language = "java"
         elif log.level == "ERROR":
             # Try to extract exception from message
             self._parse_message(log.message, parsed)
@@ -67,28 +81,46 @@ class ErrorParser:
 
         return parsed
 
-    def _parse_stack_trace(self, stack_trace: str, parsed: ParsedError) -> None:
-        """Extract exception class and root cause from stack trace."""
-        # Find the main exception
-        match = self.exception_pattern.search(stack_trace)
+    def _parse_java_stack_trace(self, stack_trace: str, parsed: ParsedError) -> None:
+        """Extract exception class and root cause from Java stack trace."""
+        match = self.java_exception_pattern.search(stack_trace)
         if match:
             parsed.exception_class = match.group(1)
             parsed.exception_message = match.group(2).strip()
 
-        # Find all "Caused by" entries - the last one is the root cause
-        caused_by_matches = self.caused_by_pattern.findall(stack_trace)
+        caused_by_matches = self.java_caused_by_pattern.findall(stack_trace)
         if caused_by_matches:
             last_cause = caused_by_matches[-1]
             parsed.root_cause_class = last_cause[0]
             parsed.root_cause_message = last_cause[1].strip()
         else:
-            # No "Caused by", root cause is the main exception
             parsed.root_cause_class = parsed.exception_class
             parsed.root_cause_message = parsed.exception_message
 
+    def _parse_python_traceback(self, stack_trace: str, parsed: ParsedError) -> None:
+        """Extract exception class and message from Python traceback."""
+        matches = self.python_exception_pattern.findall(stack_trace)
+        if matches:
+            last_match = matches[-1]
+            parsed.exception_class = last_match[0]
+            parsed.exception_message = last_match[1].strip() if last_match[1] else ""
+            parsed.root_cause_class = parsed.exception_class
+            parsed.root_cause_message = parsed.exception_message
+
+        if len(matches) > 1:
+            first_match = matches[0]
+            parsed.root_cause_class = first_match[0]
+            parsed.root_cause_message = first_match[1].strip() if first_match[1] else ""
+
     def _parse_message(self, message: str, parsed: ParsedError) -> None:
         """Try to extract exception info from log message."""
-        match = self.exception_pattern.search(message)
+        match = self.java_exception_pattern.search(message)
+        if match:
+            parsed.language = "java"
+        else:
+            match = self.python_exception_pattern.search(message)
+            if match:
+                parsed.language = "python"
         if match:
             parsed.exception_class = match.group(1)
             parsed.exception_message = match.group(2).strip()
@@ -102,7 +134,6 @@ class ErrorParser:
         if parsed.exception_class:
             parts.append(parsed.exception_class)
         if parsed.exception_message:
-            # Normalize variable parts for better clustering
             normalized = self._normalize_message(parsed.exception_message)
             parts.append(normalized)
         elif parsed.message:
@@ -113,7 +144,6 @@ class ErrorParser:
 
     def _normalize_message(self, message: str) -> str:
         """Normalize message for better pattern matching."""
-        # Replace common variable patterns
         normalized = message
 
         # IPs
