@@ -56,6 +56,21 @@ flowchart LR
     P_API -- "SELECT" --> PG
 ```
 
+## VRL (Vector Remap Language)
+
+Vector에서 로그 데이터를 변환/가공할 때 사용하는 스크립트 언어입니다. `vector.toml`의 `transforms` 섹션에서 사용됩니다.
+
+```toml
+[transforms.enrich_logback]
+type = "remap"
+source = '''
+.source = "logback"        # 로그 출처 표시 필드 추가
+.processed_at = now()       # Vector 처리 시점 타임스탬프 추가
+'''
+```
+
+필드 추가, 삭제, 변환, 조건 분기 등을 지원하며, Vector 파이프라인 내에서 로그를 정제하는 역할을 합니다.
+
 ## Data Flow
 
 ```mermaid
