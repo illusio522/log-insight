@@ -1,13 +1,35 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: log-insight-postgres
+    environment:
+      POSTGRES_DB: loginsight
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   python-parser:
     build: .
     container_name: log-insight-parser
     ports:
       - "8002:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/loginsight
     volumes:
-      - ./logs:/app/logs
       - ./data:/app/data
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
@@ -48,3 +70,4 @@ services:
 
 volumes:
   vector-data:
+  pgdata:

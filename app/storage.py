@@ -1,247 +1,300 @@
-import duckdb
+import asyncio
+import asyncpg
+import logging
+import os
 import pandas as pd
 from datetime import datetime
 from typing import Optional
-from pathlib import Path
 
 from app.models import ParsedError, LogStats
 
+logger = logging.getLogger(__name__)
+
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://postgres:postgres@localhost:5432/loginsight",
+)
+
+QUEUE_BATCH_SIZE = 50
+QUEUE_FLUSH_INTERVAL = 0.5  # seconds
+
 
 class LogStorage:
-    """DuckDB-based storage for parsed logs."""
+    """PostgreSQL-based storage for parsed logs with async write queue."""
 
-    def __init__(self, db_path: str = "logs/log_insight.db"):
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self.conn = duckdb.connect(db_path)
-        self._init_tables()
+    def __init__(self, pool: asyncpg.Pool):
+        self.pool = pool
+        self._queue: asyncio.Queue[ParsedError] = asyncio.Queue()
+        self._writer_task: Optional[asyncio.Task] = None
 
-    def _init_tables(self):
+    async def start(self):
+        """Initialize tables and start background writer."""
+        await self._init_tables()
+        self._writer_task = asyncio.create_task(self._background_writer())
+
+    async def stop(self):
+        """Flush remaining queue items and stop."""
+        if self._writer_task:
+            self._writer_task.cancel()
+            try:
+                await self._writer_task
+            except asyncio.CancelledError:
+                pass
+        await self._flush_queue()
+
+    async def _init_tables(self):
         """Initialize database tables."""
-        self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS logs (
-                id INTEGER PRIMARY KEY,
-                timestamp TIMESTAMP,
-                application VARCHAR,
-                hostname VARCHAR,
-                instance VARCHAR,
-                domain VARCHAR,
-                api VARCHAR,
-                trace_id VARCHAR,
-                user_id VARCHAR,
-                level VARCHAR,
-                message VARCHAR,
-                logger_name VARCHAR,
-                exception_class VARCHAR,
-                exception_message VARCHAR,
-                root_cause_class VARCHAR,
-                root_cause_message VARCHAR,
-                template_id INTEGER,
-                template VARCHAR,
-                stack_trace VARCHAR,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS logs (
+                    id BIGSERIAL PRIMARY KEY,
+                    timestamp TIMESTAMPTZ,
+                    application VARCHAR,
+                    hostname VARCHAR,
+                    instance VARCHAR,
+                    domain VARCHAR,
+                    api VARCHAR,
+                    trace_id VARCHAR,
+                    user_id VARCHAR,
+                    level VARCHAR,
+                    message TEXT,
+                    logger_name VARCHAR,
+                    exception_class VARCHAR,
+                    exception_message TEXT,
+                    root_cause_class VARCHAR,
+                    root_cause_message TEXT,
+                    template_id INTEGER,
+                    template TEXT,
+                    stack_trace TEXT,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
 
-        self.conn.execute("""
-            CREATE SEQUENCE IF NOT EXISTS logs_id_seq START 1
-        """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs (timestamp)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_level ON logs (level)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_application ON logs (application)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_exception_class ON logs (exception_class)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_template_id ON logs (template_id)")
 
-        # Indexes for common query patterns
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs (timestamp)")
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_level ON logs (level)")
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_application ON logs (application)")
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_exception_class ON logs (exception_class)")
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_template_id ON logs (template_id)")
+    # ------------------------------------------------------------------
+    # Background writer
+    # ------------------------------------------------------------------
 
-    def insert(self, error: ParsedError) -> None:
-        """Insert a parsed error into storage."""
-        self.conn.execute(
-            """
-            INSERT INTO logs (
-                id, timestamp, application, hostname, instance, domain, api,
-                trace_id, user_id, level, message, logger_name,
-                exception_class, exception_message, root_cause_class, root_cause_message,
-                template_id, template, stack_trace
-            ) VALUES (
-                nextval('logs_id_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-            )
-        """,
-            [
-                error.timestamp,
-                error.application,
-                error.hostname,
-                error.instance,
-                error.domain,
-                error.api,
-                error.traceId,
-                error.userId,
-                error.level,
-                error.message,
-                error.logger_name,
-                error.exception_class,
-                error.exception_message,
-                error.root_cause_class,
-                error.root_cause_message,
-                error.template_id,
-                error.template,
-                error.stack_trace,
-            ],
+    async def _background_writer(self):
+        """Drains the queue in batches."""
+        while True:
+            batch = []
+            try:
+                item = await asyncio.wait_for(
+                    self._queue.get(), timeout=QUEUE_FLUSH_INTERVAL
+                )
+                batch.append(item)
+                while len(batch) < QUEUE_BATCH_SIZE:
+                    try:
+                        item = self._queue.get_nowait()
+                        batch.append(item)
+                    except asyncio.QueueEmpty:
+                        break
+            except asyncio.TimeoutError:
+                pass
+            except asyncio.CancelledError:
+                raise
+
+            if batch:
+                await self._flush_batch(batch)
+
+    async def _flush_batch(self, batch: list[ParsedError]):
+        """Write a batch to PostgreSQL."""
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.executemany(
+                    """INSERT INTO logs (
+                        timestamp, application, hostname, instance, domain, api,
+                        trace_id, user_id, level, message, logger_name,
+                        exception_class, exception_message, root_cause_class,
+                        root_cause_message, template_id, template, stack_trace
+                    ) VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+                        $12, $13, $14, $15, $16, $17, $18
+                    )""",
+                    [self._error_to_tuple(e) for e in batch],
+                )
+        except Exception as e:
+            logger.error(f"Failed to write batch ({len(batch)} items): {e}")
+
+    async def _flush_queue(self):
+        """Flush all remaining items in the queue."""
+        batch = []
+        while not self._queue.empty():
+            try:
+                batch.append(self._queue.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        if batch:
+            await self._flush_batch(batch)
+
+    @staticmethod
+    def _error_to_tuple(error: ParsedError) -> tuple:
+        return (
+            error.timestamp, error.application, error.hostname,
+            error.instance, error.domain, error.api, error.traceId,
+            error.userId, error.level, error.message, error.logger_name,
+            error.exception_class, error.exception_message,
+            error.root_cause_class, error.root_cause_message,
+            error.template_id, error.template, error.stack_trace,
         )
 
-    def insert_batch(self, errors: list[ParsedError]) -> None:
-        """Insert multiple parsed errors."""
-        if not errors:
-            return
-        self.conn.executemany(
-            """
-            INSERT INTO logs (
-                id, timestamp, application, hostname, instance, domain, api,
-                trace_id, user_id, level, message, logger_name,
-                exception_class, exception_message, root_cause_class, root_cause_message,
-                template_id, template, stack_trace
-            ) VALUES (
-                nextval('logs_id_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-            )
-        """,
-            [
-                [
-                    error.timestamp,
-                    error.application,
-                    error.hostname,
-                    error.instance,
-                    error.domain,
-                    error.api,
-                    error.traceId,
-                    error.userId,
-                    error.level,
-                    error.message,
-                    error.logger_name,
-                    error.exception_class,
-                    error.exception_message,
-                    error.root_cause_class,
-                    error.root_cause_message,
-                    error.template_id,
-                    error.template,
-                    error.stack_trace,
-                ]
-                for error in errors
-            ],
-        )
+    # ------------------------------------------------------------------
+    # Write methods
+    # ------------------------------------------------------------------
 
-    def get_all_logs(self, limit: int = 1000) -> pd.DataFrame:
+    async def insert(self, error: ParsedError) -> None:
+        """Enqueue for background writing. Returns immediately."""
+        await self._queue.put(error)
+
+    async def insert_batch(self, errors: list[ParsedError]) -> None:
+        """Enqueue multiple items."""
+        for error in errors:
+            await self._queue.put(error)
+
+    # ------------------------------------------------------------------
+    # Read methods
+    # ------------------------------------------------------------------
+
+    async def get_all_logs(self, limit: int = 1000) -> pd.DataFrame:
         """Get all logs as DataFrame."""
-        limit = int(limit)
-        return self.conn.execute(
-            "SELECT * FROM logs ORDER BY timestamp DESC LIMIT ?", [limit]
-        ).fetchdf()
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM logs ORDER BY timestamp DESC LIMIT $1", limit
+            )
+            if not rows:
+                return pd.DataFrame()
+            return pd.DataFrame([dict(r) for r in rows])
 
-    def get_errors(self, limit: int = 1000) -> pd.DataFrame:
+    async def get_errors(self, limit: int = 1000) -> pd.DataFrame:
         """Get only error logs."""
-        limit = int(limit)
-        return self.conn.execute(
-            "SELECT * FROM logs WHERE level = 'ERROR' ORDER BY timestamp DESC LIMIT ?", [limit]
-        ).fetchdf()
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM logs WHERE level = 'ERROR' ORDER BY timestamp DESC LIMIT $1",
+                limit,
+            )
+            if not rows:
+                return pd.DataFrame()
+            return pd.DataFrame([dict(r) for r in rows])
 
-    def get_stats(self) -> LogStats:
+    async def get_stats(self) -> LogStats:
         """Get statistics for dashboard."""
         stats = LogStats()
 
-        # Total counts
-        stats.total_logs = self.conn.execute("SELECT COUNT(*) FROM logs").fetchone()[0]
-        stats.total_errors = self.conn.execute(
-            "SELECT COUNT(*) FROM logs WHERE level = 'ERROR'"
-        ).fetchone()[0]
-        stats.unique_patterns = self.conn.execute(
-            "SELECT COUNT(DISTINCT template_id) FROM logs WHERE level = 'ERROR'"
-        ).fetchone()[0]
+        async with self.pool.acquire() as conn:
+            stats.total_logs = await conn.fetchval("SELECT COUNT(*) FROM logs")
+            stats.total_errors = await conn.fetchval(
+                "SELECT COUNT(*) FROM logs WHERE level = 'ERROR'"
+            )
+            stats.unique_patterns = await conn.fetchval(
+                "SELECT COUNT(DISTINCT template_id) FROM logs WHERE level = 'ERROR'"
+            )
 
-        # Top exceptions
-        top_exceptions = self.conn.execute("""
-            SELECT
-                COALESCE(root_cause_class, exception_class, 'Unknown') as exception,
-                COUNT(*) as count
-            FROM logs
-            WHERE level = 'ERROR'
-            GROUP BY 1
-            ORDER BY count DESC
-            LIMIT 10
-        """).fetchdf()
-        stats.top_exceptions = top_exceptions.to_dict("records")
+            rows = await conn.fetch("""
+                SELECT
+                    COALESCE(root_cause_class, exception_class, 'Unknown') as exception,
+                    COUNT(*) as count
+                FROM logs
+                WHERE level = 'ERROR'
+                GROUP BY 1
+                ORDER BY count DESC
+                LIMIT 10
+            """)
+            stats.top_exceptions = [dict(r) for r in rows]
 
-        # Top applications
-        top_apps = self.conn.execute("""
-            SELECT
-                COALESCE(application, 'Unknown') as application,
-                COUNT(*) as count
-            FROM logs
-            WHERE level = 'ERROR'
-            GROUP BY 1
-            ORDER BY count DESC
-            LIMIT 10
-        """).fetchdf()
-        stats.top_applications = top_apps.to_dict("records")
+            rows = await conn.fetch("""
+                SELECT
+                    COALESCE(application, 'Unknown') as application,
+                    COUNT(*) as count
+                FROM logs
+                WHERE level = 'ERROR'
+                GROUP BY 1
+                ORDER BY count DESC
+                LIMIT 10
+            """)
+            stats.top_applications = [dict(r) for r in rows]
 
-        # Errors by hour
-        errors_by_hour = self.conn.execute("""
-            SELECT
-                DATE_TRUNC('hour', timestamp) as hour,
-                COUNT(*) as count
-            FROM logs
-            WHERE level = 'ERROR' AND timestamp IS NOT NULL
-            GROUP BY 1
-            ORDER BY hour DESC
-            LIMIT 24
-        """).fetchdf()
-        stats.errors_by_hour = errors_by_hour.to_dict("records")
+            rows = await conn.fetch("""
+                SELECT
+                    DATE_TRUNC('hour', timestamp) as hour,
+                    COUNT(*) as count
+                FROM logs
+                WHERE level = 'ERROR' AND timestamp IS NOT NULL
+                GROUP BY 1
+                ORDER BY hour DESC
+                LIMIT 24
+            """)
+            stats.errors_by_hour = [dict(r) for r in rows]
 
         return stats
 
-    def get_error_patterns(self) -> pd.DataFrame:
+    async def get_error_patterns(self) -> pd.DataFrame:
         """Get error patterns with counts."""
-        return self.conn.execute("""
-            SELECT
-                template_id,
-                template,
-                COALESCE(root_cause_class, exception_class) as exception_class,
-                COUNT(*) as count,
-                MAX(timestamp) as last_seen,
-                MIN(timestamp) as first_seen
-            FROM logs
-            WHERE level = 'ERROR'
-            GROUP BY template_id, template, COALESCE(root_cause_class, exception_class)
-            ORDER BY count DESC
-        """).fetchdf()
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT
+                    template_id,
+                    template,
+                    COALESCE(root_cause_class, exception_class) as exception_class,
+                    COUNT(*) as count,
+                    MAX(timestamp) as last_seen,
+                    MIN(timestamp) as first_seen
+                FROM logs
+                WHERE level = 'ERROR'
+                GROUP BY template_id, template, COALESCE(root_cause_class, exception_class)
+                ORDER BY count DESC
+            """)
+            if not rows:
+                return pd.DataFrame()
+            return pd.DataFrame([dict(r) for r in rows])
 
-    def get_errors_by_application(self) -> pd.DataFrame:
+    async def get_errors_by_application(self) -> pd.DataFrame:
         """Get error counts by application."""
-        return self.conn.execute("""
-            SELECT
-                COALESCE(application, 'Unknown') as application,
-                COALESCE(domain, 'Unknown') as domain,
-                COUNT(*) as error_count,
-                COUNT(DISTINCT template_id) as unique_patterns
-            FROM logs
-            WHERE level = 'ERROR'
-            GROUP BY application, domain
-            ORDER BY error_count DESC
-        """).fetchdf()
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT
+                    COALESCE(application, 'Unknown') as application,
+                    COALESCE(domain, 'Unknown') as domain,
+                    COUNT(*) as error_count,
+                    COUNT(DISTINCT template_id) as unique_patterns
+                FROM logs
+                WHERE level = 'ERROR'
+                GROUP BY application, domain
+                ORDER BY error_count DESC
+            """)
+            if not rows:
+                return pd.DataFrame()
+            return pd.DataFrame([dict(r) for r in rows])
 
     _ALLOWED_INTERVALS = {"second", "minute", "hour", "day", "week", "month", "year"}
 
-    def get_errors_by_time(self, interval: str = "hour") -> pd.DataFrame:
+    async def get_errors_by_time(self, interval: str = "hour") -> pd.DataFrame:
         """Get error counts by time interval."""
         if interval not in self._ALLOWED_INTERVALS:
             raise ValueError(f"Invalid interval: {interval}. Must be one of {self._ALLOWED_INTERVALS}")
-        return self.conn.execute(f"""
-            SELECT
-                DATE_TRUNC('{interval}', timestamp) as time_bucket,
-                COALESCE(application, 'Unknown') as application,
-                COUNT(*) as count
-            FROM logs
-            WHERE level = 'ERROR' AND timestamp IS NOT NULL
-            GROUP BY 1, 2
-            ORDER BY time_bucket
-        """).fetchdf()
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(f"""
+                SELECT
+                    DATE_TRUNC('{interval}', timestamp) as time_bucket,
+                    COALESCE(application, 'Unknown') as application,
+                    COUNT(*) as count
+                FROM logs
+                WHERE level = 'ERROR' AND timestamp IS NOT NULL
+                GROUP BY 1, 2
+                ORDER BY time_bucket
+            """)
+            if not rows:
+                return pd.DataFrame()
+            return pd.DataFrame([dict(r) for r in rows])
+
+    # ------------------------------------------------------------------
+    # Filtered queries
+    # ------------------------------------------------------------------
 
     _ALLOWED_SORT_COLUMNS = {"timestamp", "application", "exception_class", "level"}
     _ALLOWED_SORT_ORDERS = {"asc", "desc"}
@@ -254,33 +307,41 @@ class LogStorage:
         api: Optional[str] = None,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
-    ) -> tuple[list[str], list]:
+        start_idx: int = 1,
+    ) -> tuple[list[str], list, int]:
         """Build WHERE conditions and params for error queries."""
         conditions = ["level = 'ERROR'"]
         params = []
+        idx = start_idx
 
         if application:
-            conditions.append("application = ?")
+            conditions.append(f"application = ${idx}")
             params.append(application)
+            idx += 1
         if domain:
-            conditions.append("domain = ?")
+            conditions.append(f"domain = ${idx}")
             params.append(domain)
+            idx += 1
         if api:
-            conditions.append("api LIKE ?")
+            conditions.append(f"api LIKE ${idx}")
             params.append(api.replace("*", "%"))
+            idx += 1
         if exception_class:
-            conditions.append("(exception_class LIKE ? OR root_cause_class LIKE ?)")
+            conditions.append(f"(exception_class LIKE ${idx} OR root_cause_class LIKE ${idx + 1})")
             params.extend([f"%{exception_class}%", f"%{exception_class}%"])
+            idx += 2
         if start_time:
-            conditions.append("timestamp >= ?")
+            conditions.append(f"timestamp >= ${idx}")
             params.append(start_time)
+            idx += 1
         if end_time:
-            conditions.append("timestamp <= ?")
+            conditions.append(f"timestamp <= ${idx}")
             params.append(end_time)
+            idx += 1
 
-        return conditions, params
+        return conditions, params, idx
 
-    def search_errors(
+    async def search_errors(
         self,
         application: Optional[str] = None,
         domain: Optional[str] = None,
@@ -294,7 +355,7 @@ class LogStorage:
         sort_order: str = "desc",
     ) -> pd.DataFrame:
         """Search errors with filters."""
-        conditions, params = self._build_error_filter(
+        conditions, params, idx = self._build_error_filter(
             application=application, domain=domain, exception_class=exception_class,
             api=api, start_time=start_time, end_time=end_time,
         )
@@ -311,11 +372,15 @@ class LogStorage:
             SELECT * FROM logs
             WHERE {' AND '.join(conditions)}
             ORDER BY {sort_by} {sort_order.upper()}
-            LIMIT ? OFFSET ?
+            LIMIT ${idx} OFFSET ${idx + 1}
         """
-        return self.conn.execute(query, params).fetchdf()
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(query, *params)
+            if not rows:
+                return pd.DataFrame()
+            return pd.DataFrame([dict(r) for r in rows])
 
-    def count_errors(
+    async def count_errors(
         self,
         application: Optional[str] = None,
         domain: Optional[str] = None,
@@ -325,20 +390,39 @@ class LogStorage:
         end_time: Optional[datetime] = None,
     ) -> int:
         """Count errors matching filters."""
-        conditions, params = self._build_error_filter(
+        conditions, params, _ = self._build_error_filter(
             application=application, domain=domain, exception_class=exception_class,
             api=api, start_time=start_time, end_time=end_time,
         )
 
         query = f"SELECT COUNT(*) FROM logs WHERE {' AND '.join(conditions)}"
-        return self.conn.execute(query, params).fetchone()[0]
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval(query, *params)
 
-    def clear(self):
+    async def clear(self):
         """Clear all logs."""
-        self.conn.execute("DELETE FROM logs")
-        self.conn.execute("DROP SEQUENCE IF EXISTS logs_id_seq")
-        self.conn.execute("CREATE SEQUENCE logs_id_seq START 1")
+        async with self.pool.acquire() as conn:
+            await conn.execute("TRUNCATE logs RESTART IDENTITY")
 
 
-# Global storage instance
-storage = LogStorage()
+# ------------------------------------------------------------------
+# Module-level initialization
+# ------------------------------------------------------------------
+
+storage: Optional[LogStorage] = None
+
+
+async def init_storage() -> LogStorage:
+    global storage
+    pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10)
+    storage = LogStorage(pool)
+    await storage.start()
+    return storage
+
+
+async def close_storage():
+    global storage
+    if storage:
+        await storage.stop()
+        await storage.pool.close()
+        storage = None

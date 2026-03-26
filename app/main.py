@@ -1,4 +1,5 @@
 import logging
+from contextlib import asynccontextmanager
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,16 +8,25 @@ from typing import Optional, Union
 
 from app.models import LogEntry, LogStats
 from app.parser import error_parser
-from app.storage import storage
+import app.storage as storage_module
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await storage_module.init_storage()
+    yield
+    await storage_module.close_storage()
+
+
 app = FastAPI(
     title="Log Insight Parser",
     description="Python log parser service for error analysis",
-    version="0.1.0",
+    version="0.2.0",
+    lifespan=lifespan,
 )
 
 # CORS for dashboard
@@ -52,8 +62,8 @@ async def receive_logs(logs: Union[list[LogEntry], LogEntry]):
             # Parse and analyze the log
             parsed = error_parser.parse(log)
 
-            # Store all logs (for now, storing everything for analysis)
-            storage.insert(parsed)
+            # Enqueue for background writing
+            await storage_module.storage.insert(parsed)
 
             processed += 1
             if log.level == "ERROR":
@@ -75,7 +85,7 @@ async def receive_logs(logs: Union[list[LogEntry], LogEntry]):
 @app.get("/stats", response_model=LogStats)
 async def get_stats():
     """Get log statistics for dashboard."""
-    return storage.get_stats()
+    return await storage_module.storage.get_stats()
 
 
 @app.get("/patterns")
@@ -99,7 +109,7 @@ async def get_errors(
     sort_order: str = "desc",
 ):
     """Get error logs with optional filters."""
-    df = storage.search_errors(
+    df = await storage_module.storage.search_errors(
         application=application,
         domain=domain,
         exception_class=exception_class,
@@ -111,7 +121,7 @@ async def get_errors(
         sort_by=sort_by,
         sort_order=sort_order,
     )
-    total = storage.count_errors(
+    total = await storage_module.storage.count_errors(
         application=application,
         domain=domain,
         exception_class=exception_class,
@@ -125,7 +135,7 @@ async def get_errors(
 @app.get("/errors/by-application")
 async def get_errors_by_application():
     """Get error counts grouped by application."""
-    df = storage.get_errors_by_application()
+    df = await storage_module.storage.get_errors_by_application()
     return {"data": df.to_dict("records")}
 
 
@@ -134,14 +144,14 @@ async def get_errors_by_time(interval: str = "hour"):
     """Get error counts over time."""
     if interval not in ["minute", "hour", "day"]:
         raise HTTPException(status_code=400, detail="Invalid interval")
-    df = storage.get_errors_by_time(interval)
+    df = await storage_module.storage.get_errors_by_time(interval)
     return {"data": df.to_dict("records")}
 
 
 @app.delete("/logs")
 async def clear_logs():
     """Clear all stored logs."""
-    storage.clear()
+    await storage_module.storage.clear()
     return {"status": "cleared"}
 
 
