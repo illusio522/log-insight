@@ -3,21 +3,217 @@ Locust performance test for log-insight.
 
 Usage:
     # Web UI mode (http://localhost:8089)
-    locust -f scripts/locustfile.py --host http://localhost:8000
+    locust -f scripts/locustfile.py --host http://localhost:8080
 
     # Headless mode (CLI only)
-    locust -f scripts/locustfile.py --host http://localhost:8000 \
+    locust -f scripts/locustfile.py --host http://localhost:8080 \
         --headless -u 50 -r 10 --run-time 60s
+
+Custom payload:
+    Locust Web UI (http://localhost:8089) 의 "Custom Payload" 탭에서
+    JSON을 직접 입력하면 해당 payload로 부하 테스트를 수행합니다.
+    비워두면 내장 랜덤 로그 생성기를 사용합니다.
 """
 
+import json
 import random
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from locust import HttpUser, between, task
+from flask import Blueprint, jsonify, request
+from locust import HttpUser, between, events, task
 
 # ---------------------------------------------------------------------------
-# Reuse log generation logic from generate_logs.py
+# Custom payload store
+# ---------------------------------------------------------------------------
+
+custom_payloads = []
+
+custom_ui = Blueprint("custom_ui", __name__)
+
+
+@custom_ui.route("/custom-payload", methods=["GET"])
+def custom_payload_page():
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Custom Payload</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
+            .container { max-width: 800px; margin: 0 auto; }
+            h2 { color: #333; }
+            textarea {
+                width: 100%; height: 300px; padding: 12px;
+                font-family: monospace; font-size: 14px;
+                border: 1px solid #ccc; border-radius: 4px;
+                resize: vertical;
+            }
+            .btn {
+                padding: 10px 24px; margin: 8px 4px; border: none;
+                border-radius: 4px; cursor: pointer; font-size: 14px;
+            }
+            .btn-primary { background: #4CAF50; color: white; }
+            .btn-danger { background: #f44336; color: white; }
+            .btn-secondary { background: #888; color: white; }
+            .btn:hover { opacity: 0.85; }
+            .status {
+                margin-top: 16px; padding: 12px;
+                border-radius: 4px; display: none;
+            }
+            .success { background: #dff0d8; color: #3c763d; display: block; }
+            .error { background: #f2dede; color: #a94442; display: block; }
+            .info { background: #d9edf7; color: #31708f; }
+            .current { margin-top: 16px; padding: 12px; background: #fff; border: 1px solid #ddd; border-radius: 4px; }
+            .current pre { white-space: pre-wrap; word-wrap: break-word; max-height: 200px; overflow-y: auto; }
+            .hint { color: #888; font-size: 13px; margin-bottom: 8px; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <a href="/" style="color:#7ece4e; font-size:13px;">&larr; Back to Locust</a>
+            <h2>Custom Payload</h2>
+            <p class="hint">
+                JSON 객체 또는 배열을 입력하세요. 배열이면 랜덤으로 하나씩 선택하여 전송합니다.<br>
+                비워두고 Clear 하면 내장 랜덤 로그 생성기를 사용합니다.
+            </p>
+            <textarea id="payload" placeholder='{
+  "level": "ERROR",
+  "message": "something failed",
+  "application": "my-service",
+  "stack_trace": "java.lang.NullPointerException: ..."
+}
+
+or array:
+
+[
+  {"level": "ERROR", "message": "error 1", "application": "svc-a"},
+  {"level": "INFO", "message": "ok", "application": "svc-b"}
+]
+
+* @timestamp is auto-generated'></textarea>
+            <div>
+                <button class="btn btn-primary" onclick="setPayload()">Set Payload</button>
+                <button class="btn btn-danger" onclick="clearPayload()">Clear</button>
+                <button class="btn btn-secondary" onclick="loadCurrent()">Refresh Status</button>
+            </div>
+            <div id="status" class="status"></div>
+            <div class="current">
+                <strong>Current:</strong>
+                <div id="current-info" class="info" style="margin-top:8px; padding:8px; border-radius:4px;">Loading...</div>
+                <pre id="current-payload"></pre>
+            </div>
+        </div>
+        <script>
+            function setPayload() {
+                const text = document.getElementById('payload').value.trim();
+                if (!text) { showStatus('JSON을 입력하세요.', 'error'); return; }
+                try { JSON.parse(text); } catch(e) { showStatus('Invalid JSON: ' + e.message, 'error'); return; }
+                fetch('/custom-payload/api', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: text
+                })
+                .then(r => r.json())
+                .then(d => { showStatus(d.message, 'success'); loadCurrent(); })
+                .catch(e => showStatus('Error: ' + e, 'error'));
+            }
+            function clearPayload() {
+                fetch('/custom-payload/api', {method: 'DELETE'})
+                .then(r => r.json())
+                .then(d => { showStatus(d.message, 'success'); loadCurrent(); document.getElementById('payload').value = ''; })
+                .catch(e => showStatus('Error: ' + e, 'error'));
+            }
+            function loadCurrent() {
+                fetch('/custom-payload/api')
+                .then(r => r.json())
+                .then(d => {
+                    const info = document.getElementById('current-info');
+                    const pre = document.getElementById('current-payload');
+                    if (d.count > 0) {
+                        info.textContent = d.count + ' payload(s) registered';
+                        info.style.background = '#dff0d8';
+                        pre.textContent = JSON.stringify(d.payloads, null, 2);
+                    } else {
+                        info.textContent = 'No custom payload. Using built-in random generator.';
+                        info.style.background = '#d9edf7';
+                        pre.textContent = '';
+                    }
+                });
+            }
+            function showStatus(msg, type) {
+                const el = document.getElementById('status');
+                el.textContent = msg;
+                el.className = 'status ' + type;
+            }
+            loadCurrent();
+        </script>
+    </body>
+    </html>
+    """
+
+
+@custom_ui.route("/custom-payload/api", methods=["GET"])
+def get_payload():
+    return jsonify({"count": len(custom_payloads), "payloads": custom_payloads})
+
+
+@custom_ui.route("/custom-payload/api", methods=["POST"])
+def set_payload():
+    global custom_payloads
+    data = request.get_json(force=True)
+    if isinstance(data, list):
+        custom_payloads = data
+    else:
+        custom_payloads = [data]
+    return jsonify({"message": f"{len(custom_payloads)} payload(s) registered", "count": len(custom_payloads)})
+
+
+@custom_ui.route("/custom-payload/api", methods=["DELETE"])
+def clear_payload():
+    global custom_payloads
+    custom_payloads = []
+    return jsonify({"message": "Cleared. Using built-in random generator.", "count": 0})
+
+
+start_page_inject = Blueprint("start_page_inject", __name__)
+
+
+@start_page_inject.after_app_request
+def inject_payload_link(response):
+    if response.content_type and "text/html" in response.content_type:
+        snippet = """
+<script>
+(function() {
+    if (document.getElementById('payload-link')) return;
+    function tryInject() {
+        var form = document.querySelector('.MuiBox-root form') || document.querySelector('form');
+        if (!form) { setTimeout(tryInject, 500); return; }
+        var div = document.createElement('div');
+        div.id = 'payload-link';
+        div.style.cssText = 'text-align:center; margin-top:12px;';
+        div.innerHTML = '<a href="/custom-payload" style="color:#7ece4e; font-size:14px;">Custom Payload Settings</a>';
+        form.parentNode.insertBefore(div, form.nextSibling);
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', tryInject);
+    else tryInject();
+})();
+</script>
+"""
+        data = response.get_data(as_text=True)
+        data = data.replace("</body>", snippet + "</body>")
+        response.set_data(data)
+    return response
+
+
+@events.init.add_listener
+def on_init(environment, **kwargs):
+    environment.web_ui.app.register_blueprint(custom_ui)
+    environment.web_ui.app.register_blueprint(start_page_inject)
+
+
+# ---------------------------------------------------------------------------
+# Built-in random log generator
 # ---------------------------------------------------------------------------
 
 APPS = [
@@ -157,8 +353,17 @@ def _generate_log() -> dict:
     return log
 
 
-def _generate_batch(size: int) -> list[dict]:
-    return [_generate_log() for _ in range(size)]
+def _get_payload() -> dict:
+    """Get a payload to send: custom if set, otherwise random generated."""
+    if custom_payloads:
+        payload = dict(random.choice(custom_payloads))
+        payload["@timestamp"] = datetime.now(KST).isoformat(timespec="milliseconds")
+        return payload
+    return _generate_log()
+
+
+def _get_batch(size: int) -> list[dict]:
+    return [_get_payload() for _ in range(size)]
 
 
 # ---------------------------------------------------------------------------
@@ -173,12 +378,12 @@ class LogIngestUser(HttpUser):
 
     @task(3)
     def send_single_log(self):
-        self.client.post("/logs", json=_generate_log(), name="/logs [single]")
+        self.client.post("/logs", json=_get_payload(), name="/logs [single]")
 
     @task(1)
     def send_batch_logs(self):
-        batch = _generate_batch(random.choice([10, 20, 50]))
-        self.client.post("/logs", json=batch, name=f"/logs [batch]")
+        batch = _get_batch(random.choice([10, 20, 50]))
+        self.client.post("/logs", json=batch, name="/logs [batch]")
 
 
 class DashboardUser(HttpUser):
