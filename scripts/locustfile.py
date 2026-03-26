@@ -16,6 +16,7 @@ Custom payload:
 """
 
 import json
+import os
 import random
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -108,10 +109,9 @@ or array:
             function setPayload() {
                 const text = document.getElementById('payload').value.trim();
                 if (!text) { showStatus('JSON을 입력하세요.', 'error'); return; }
-                try { JSON.parse(text); } catch(e) { showStatus('Invalid JSON: ' + e.message, 'error'); return; }
                 fetch('/custom-payload/api', {
                     method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
+                    headers: {'Content-Type': 'text/plain'},
                     body: text
                 })
                 .then(r => r.json())
@@ -161,7 +161,15 @@ def get_payload():
 @custom_ui.route("/custom-payload/api", methods=["POST"])
 def set_payload():
     global custom_payloads
-    data = request.get_json(force=True)
+    raw = request.get_data(as_text=True)
+    # Fix control characters inside JSON string values:
+    # Real tab (0x09) -> \t, real newline -> \n (only inside strings)
+    import re
+    fixed = re.sub(r'(?<=")([^"]*?)(?=")', lambda m: m.group(0).replace('\t', '\\t').replace('\n', '\\n').replace('\r', ''), raw)
+    try:
+        data = json.loads(fixed)
+    except json.JSONDecodeError as e:
+        return jsonify({"message": f"Invalid JSON: {e}"}), 400
     if isinstance(data, list):
         custom_payloads = data
     else:
@@ -185,18 +193,20 @@ def inject_payload_link(response):
         snippet = """
 <script>
 (function() {
-    if (document.getElementById('payload-link')) return;
-    function tryInject() {
-        var form = document.querySelector('.MuiBox-root form') || document.querySelector('form');
-        if (!form) { setTimeout(tryInject, 500); return; }
-        var div = document.createElement('div');
-        div.id = 'payload-link';
-        div.style.cssText = 'text-align:center; margin-top:12px;';
-        div.innerHTML = '<a href="/custom-payload" style="color:#7ece4e; font-size:14px;">Custom Payload Settings</a>';
-        form.parentNode.insertBefore(div, form.nextSibling);
+    function injectLink() {
+        var forms = document.querySelectorAll('form');
+        forms.forEach(function(form) {
+            if (form.dataset.payloadLinked) return;
+            form.dataset.payloadLinked = 'true';
+            var div = document.createElement('div');
+            div.style.cssText = 'text-align:center; margin-top:12px;';
+            div.innerHTML = '<a href="/custom-payload" style="color:#7ece4e; font-size:14px;">Custom Payload Settings</a>';
+            form.parentNode.insertBefore(div, form.nextSibling);
+        });
     }
-    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', tryInject);
-    else tryInject();
+    var observer = new MutationObserver(function() { setTimeout(injectLink, 100); });
+    observer.observe(document.body, {childList: true, subtree: true});
+    injectLink();
 })();
 </script>
 """
@@ -386,10 +396,16 @@ class LogIngestUser(HttpUser):
         self.client.post("/logs", json=batch, name="/logs [batch]")
 
 
+PARSER_URL = os.getenv("PARSER_URL", "http://localhost:8002")
+
+
 class DashboardUser(HttpUser):
-    """Simulates dashboard users querying the API."""
+    """Simulates dashboard users querying the Parser API."""
     wait_time = between(1, 3)
     weight = 1
+
+    def on_start(self):
+        self.client.base_url = PARSER_URL
 
     @task(3)
     def get_stats(self):
