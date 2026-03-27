@@ -2,6 +2,43 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Pre-Release Checklist
+
+개발 완료 또는 운영 배포 요청 시, 아래 항목을 기준으로 점검을 수행한다.
+
+### 보안
+- [ ] 인증/인가: API 엔드포인트에 인증 적용 여부 (최소 API Key)
+- [ ] 입력값 검증: 사용자 입력에 대한 범위/형식 제한
+- [ ] SQL Injection: 동적 쿼리에 파라미터 바인딩 사용 여부
+- [ ] CORS: 허용 origin, method, header가 최소 범위로 제한되어 있는지
+- [ ] 비밀번호/키: 코드 및 설정 파일에 하드코딩된 credential 없는지
+- [ ] 파괴적 API (DELETE 등): 보호 장치 (인증, 확인, 감사 로그) 적용 여부
+
+### 안정성
+- [ ] 에러 처리: 실패 시 재시도, 로깅, 알림이 적절한지
+- [ ] 동시성: 공유 자원에 대한 race condition 보호 (Lock, 큐 등)
+- [ ] Health Check: DB 등 의존 서비스 상태를 반영하는지
+- [ ] Graceful Shutdown: 종료 시 진행 중 작업 완료 후 종료하는지
+- [ ] 데이터 유실: 비동기 처리 시 실패한 데이터의 재처리 방안
+
+### 성능
+- [ ] DB 인덱스: 주요 쿼리 패턴에 맞는 인덱스 존재 여부
+- [ ] 커넥션 풀: 적절한 크기 설정 및 환경변수화
+- [ ] Rate Limiting: 과도한 요청에 대한 제한
+- [ ] 부하 테스트: 예상 트래픽 기준 성능 검증 완료
+
+### 운영
+- [ ] 모니터링/알림: 메트릭 수집 및 이상 탐지 알림
+- [ ] 로깅: 구조화된 로그, 요청 추적 가능 여부
+- [ ] 백업/복구: DB 백업 절차 및 복구 테스트
+- [ ] 설정 외부화: 하드코딩된 설정값 없이 환경변수로 관리
+- [ ] DB 마이그레이션: 스키마 변경 도구 및 절차
+
+### 코드 품질
+- [ ] 문서 현행화: README, CLAUDE.md, 아키텍처 문서가 최신 상태인지
+- [ ] 테스트: 핵심 로직에 대한 단위/통합 테스트 존재 여부
+- [ ] 비정상 입력 처리: 비Java/Python 스택 트레이스 등 예외 케이스
+
 ## Project Overview
 
 log-insight is a Python project (Python 3.11.13) for log collection, error analysis, and visualization.
