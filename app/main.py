@@ -148,13 +148,6 @@ async def get_errors_by_time(interval: str = "hour"):
     return {"data": df.to_dict("records")}
 
 
-@app.delete("/logs")
-async def clear_logs():
-    """Clear all stored logs."""
-    await storage_module.storage.clear()
-    return {"status": "cleared"}
-
-
 if __name__ == "__main__":
     import uvicorn
 

@@ -17,6 +17,8 @@ DATABASE_URL = os.getenv(
 
 QUEUE_BATCH_SIZE = 50
 QUEUE_FLUSH_INTERVAL = 0.5  # seconds
+FLUSH_MAX_RETRIES = 3
+FLUSH_RETRY_BASE_DELAY = 1.0  # seconds
 
 
 class LogStorage:
@@ -109,23 +111,36 @@ class LogStorage:
                 await self._flush_batch(batch)
 
     async def _flush_batch(self, batch: list[ParsedError]):
-        """Write a batch to PostgreSQL."""
-        try:
-            async with self.pool.acquire() as conn:
-                await conn.executemany(
-                    """INSERT INTO logs (
-                        timestamp, application, hostname, instance, domain, api,
-                        trace_id, user_id, level, message, logger_name,
-                        exception_class, exception_message, root_cause_class,
-                        root_cause_message, template_id, template, language, stack_trace
-                    ) VALUES (
-                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-                        $12, $13, $14, $15, $16, $17, $18, $19
-                    )""",
-                    [self._error_to_tuple(e) for e in batch],
-                )
-        except Exception as e:
-            logger.error(f"Failed to write batch ({len(batch)} items): {e}")
+        """Write a batch to PostgreSQL with retry."""
+        for attempt in range(FLUSH_MAX_RETRIES):
+            try:
+                async with self.pool.acquire() as conn:
+                    await conn.executemany(
+                        """INSERT INTO logs (
+                            timestamp, application, hostname, instance, domain, api,
+                            trace_id, user_id, level, message, logger_name,
+                            exception_class, exception_message, root_cause_class,
+                            root_cause_message, template_id, template, language, stack_trace
+                        ) VALUES (
+                            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+                            $12, $13, $14, $15, $16, $17, $18, $19
+                        )""",
+                        [self._error_to_tuple(e) for e in batch],
+                    )
+                return
+            except Exception as e:
+                delay = FLUSH_RETRY_BASE_DELAY * (2 ** attempt)
+                if attempt < FLUSH_MAX_RETRIES - 1:
+                    logger.warning(
+                        f"Failed to write batch ({len(batch)} items), "
+                        f"retry {attempt + 1}/{FLUSH_MAX_RETRIES} in {delay}s: {e}"
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(
+                        f"Failed to write batch ({len(batch)} items) "
+                        f"after {FLUSH_MAX_RETRIES} retries, dropping: {e}"
+                    )
 
     async def _flush_queue(self):
         """Flush all remaining items in the queue."""
