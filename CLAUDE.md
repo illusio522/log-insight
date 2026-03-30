@@ -36,6 +36,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 코드 품질
 - [ ] 문서 현행화: README, CLAUDE.md, 아키텍처 문서가 최신 상태인지
+- [ ] 문서 정확성: 문서에 적힌 기술적 사실(설정값, 동작 방식, 정책명 등)이 실제 코드/설정 파일과 일치하는지 대조 검증
 - [ ] 테스트: 핵심 로직에 대한 단위/통합 테스트 존재 여부
 - [ ] 비정상 입력 처리: 비Java/Python 스택 트레이스 등 예외 케이스
 
@@ -93,7 +94,7 @@ docker compose down
     - HTTP endpoint on port 8080 (for testing via Postman/curl)
   - Transforms: Enrichment via VRL (Vector Remap Language)
   - Sinks: HTTP sink to Python parser (`python-parser:8000/logs`), console output for debugging
-  - Batching: 50 events or 5 seconds, disk buffer (256MB), retry with fibonacci backoff
+  - Batching: 50 events or 5 seconds, disk buffer (256MB), retry with exponential backoff
 - **Python Parser** (`app/`): FastAPI service receiving logs from Vector (containerized via Dockerfile)
   - Error parsing with Drain3 for pattern mining (state persisted to `data/drain3_state.bin`)
   - Stack trace parsing: Java and Python auto-detection with language field
