@@ -60,7 +60,7 @@ async def receive_logs(logs: Union[list[LogEntry], LogEntry]):
     for log in logs:
         try:
             # Parse and analyze the log
-            parsed = error_parser.parse(log)
+            parsed = await error_parser.parse(log)
 
             # Enqueue for background writing
             await storage_module.storage.insert(parsed)
@@ -103,8 +103,8 @@ async def get_errors(
     api: Optional[str] = None,
     start_time: Optional[datetime] = Query(None),
     end_time: Optional[datetime] = Query(None),
-    limit: int = 100,
-    offset: int = 0,
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
     sort_by: str = "timestamp",
     sort_order: str = "desc",
 ):

@@ -1,3 +1,4 @@
+import asyncio
 import os
 import re
 from typing import Optional
@@ -25,6 +26,7 @@ class ErrorParser:
         config.drain_max_children = 100
         persistence = FilePersistence(DRAIN3_STATE_FILE)
         self.miner = TemplateMiner(persistence_handler=persistence, config=config)
+        self._lock = asyncio.Lock()
 
         # Regex patterns for Java exceptions
         self.java_exception_pattern = re.compile(
@@ -44,7 +46,7 @@ class ErrorParser:
             r'^\s+File "(.+?)", line (\d+), in (.+)$', re.MULTILINE
         )
 
-    def parse(self, log: LogEntry) -> ParsedError:
+    async def parse(self, log: LogEntry) -> ParsedError:
         """Parse a log entry and extract error information."""
         parsed = ParsedError(
             timestamp=log.timestamp,
@@ -73,9 +75,10 @@ class ErrorParser:
             # Try to extract exception from message
             self._parse_message(log.message, parsed)
 
-        # Template mining for pattern grouping
-        text_for_mining = self._get_mining_text(parsed)
-        result = self.miner.add_log_message(text_for_mining)
+        # Template mining for pattern grouping (lock for thread safety)
+        async with self._lock:
+            text_for_mining = self._get_mining_text(parsed)
+            result = self.miner.add_log_message(text_for_mining)
         parsed.template_id = result["cluster_id"]
         parsed.template = result["template_mined"]
 
